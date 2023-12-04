@@ -1,3 +1,5 @@
+# Based on https://github.com/karpathy/nanoGPT
+
 from dataclasses import dataclass
 
 import torch
@@ -9,12 +11,14 @@ from dataset import PADDING_TOKEN, END_TOKEN
 
 @dataclass
 class WherePTConfig:
-    vocab_len: int = 61,
+    vocab_len: int = 61
     n_embed: int = 128
     n_head: int = 4
     n_layer: int = 4
     block_size: int = 8
     dropout: float = 0.1
+    def __post_init__(self):
+        assert self.n_embed % self.n_head == 0, "n_embed must be divisible by n_head"
 
 
 class MaskedTensor:
@@ -42,6 +46,7 @@ class CausalSelfAttentionHead(nn.Module):
         key = self.key(x) # (B, T, C)
 
         # Compute attention scores:
+
         wei = query @ key.transpose(-2, -1) * C**(-0.5) # (B, T, C) @ (B, C, T) = (B, T, T)
         # Mask out future tokens:
         wei = wei.masked_fill(self.tril[:T, :T] == 0, float("-inf")) # (B, T, T)
@@ -87,7 +92,7 @@ class TransformerBlock(nn.Module):
         super().__init__()
         head_size = config.n_embed // config.n_head
         self.sa = MultiHeadAttention(config, head_size)
-        self.ffwd = FeedForward(config.n_embed)
+        self.ffwd = FeedForward(config)
         self.ln1 = nn.LayerNorm(config.n_embed)
         self.ln2 = nn.LayerNorm(config.n_embed)
 
@@ -98,11 +103,11 @@ class TransformerBlock(nn.Module):
 
 class WherePT(nn.Module):
 
-    def __init__(self, config: WherePTConfig) -> None:
+    def __init__(self, config: WherePTConfig):
         super().__init__()
+        self.config = config
         self.token_embedding = nn.Embedding(config.vocab_len, config.n_embed)
         self.position_embedding = nn.Embedding(config.block_size, config.n_embed)
-
         self.blocks = nn.Sequential(*[TransformerBlock(config) for _ in range(config.n_layer)])
         self.ln_final = nn.LayerNorm(config.n_embed)
         self.lm_head = nn.Linear(config.n_embed, config.vocab_len)
@@ -121,7 +126,8 @@ class WherePT(nn.Module):
         if targets is None:
             loss = None
         else:
-            loss = F.cross_entropy(logits.view(-1, self.config.vocab_len), targets.view(-1))
+            loss = F.cross_entropy(logits.view(-1, self.config.vocab_len), targets.view(-1), ignore_index=PADDING_TOKEN)
+            #loss = F.cross_entropy(logits.view(-1, self.config.vocab_len), targets.view(-1))
 
         return logits, loss
     
@@ -135,6 +141,6 @@ class WherePT(nn.Module):
             next_token = torch.multinomial(probs, num_samples=1)
             idx = torch.cat([idx, next_token], dim=1)
 
-            if next_token == END_TOKEN:
+            if next_token == END_TOKEN: # TODO: handle batched
                 break
         return idx
